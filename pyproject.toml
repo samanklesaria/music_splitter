@@ -13,11 +13,16 @@ dependencies = [
     "numpy>=1.26",
     "tensorboardX>=2.6",
     "tqdm>=4.66",
+    "typeguard"
 ]
 
 [project.optional-dependencies]
 gpu = ["jax[cuda12]>=0.4.30"]
 dev = ["pytest>=8.0"]
+data = [
+    "acappella_info",
+    "yt-dlp"
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

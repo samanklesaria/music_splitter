@@ -5,7 +5,7 @@
 # then downloads each clip as WAV using yt-dlp.
 #
 # Prerequisites:
-#   pip install acappella_info
+#   uv add acappella_info  (or: uv pip install acappella_info)
 #   yt-dlp (https://github.com/yt-dlp/yt-dlp)
 #
 # Source: https://ipcv.github.io/Acappella/
@@ -26,13 +26,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Locate the acappella_info package data directory via pip
-PKG_LOCATION=$(pip show acappella_info 2>/dev/null | awk '/^Location:/ {print $2}')
-if [[ -z "$PKG_LOCATION" ]]; then
+# Locate the acappella_info package data directory via uv
+PKG_DIR=$(uv run python -c "import acappella_info, os; print(os.path.dirname(acappella_info.__file__))" 2>/dev/null)
+if [[ -z "$PKG_DIR" ]]; then
     echo "Error: acappella_info not found."
     exit 1
 fi
-PKG_DIR="$PKG_LOCATION/acappella_info"
 
 if ! command -v yt-dlp &>/dev/null; then
     echo "Error: yt-dlp not found."

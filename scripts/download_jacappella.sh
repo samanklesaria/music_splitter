@@ -23,7 +23,7 @@ echo "Note: you must be logged in and have accepted the dataset terms."
 echo "  https://huggingface.co/datasets/jaCappella/jaCappella"
 echo ""
 
-huggingface-cli download jaCappella/jaCappella \
+hf download jaCappella/jaCappella \
     --repo-type dataset \
     --local-dir "$OUTPUT_DIR"
 

@@ -22,7 +22,7 @@ ZIP="$OUTPUT_DIR/DagstuhlChoirSet.zip"
 
 echo "Downloading Dagstuhl ChoirSet (~5.1 GB) ..."
 echo "  Source: $URL"
-curl -L -o "$ZIP" --progress-bar "$URL"
+# curl -L -o "$ZIP" --progress-bar "$URL"
 
 echo "Extracting ..."
 unzip -q "$ZIP" -d "$OUTPUT_DIR"

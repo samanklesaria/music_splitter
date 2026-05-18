@@ -1,0 +1,2 @@
+- Use `uv run` when running python files.
+- To run the training loop, `uv run python src/train.py`.

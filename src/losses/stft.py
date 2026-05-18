@@ -6,9 +6,11 @@ FFT sizes for frequency-domain supervision.
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype
 
 
+@jaxtyped(typechecker=beartype)
 def _stft_magnitude(
     x: Float[Array, "T"], fft_size: int, hop_size: int, win_size: int
 ) -> Float[Array, "F K"]:
@@ -28,6 +30,7 @@ def _stft_magnitude(
     return jnp.abs(spec).T  # (F, K)
 
 
+@jaxtyped(typechecker=beartype)
 def spectral_convergence(
     est_mag: Float[Array, "F K"], ref_mag: Float[Array, "F K"]
 ) -> Float[Array, ""]:
@@ -35,6 +38,7 @@ def spectral_convergence(
     return jnp.linalg.norm(ref_mag - est_mag) / (jnp.linalg.norm(ref_mag) + 1e-8)
 
 
+@jaxtyped(typechecker=beartype)
 def log_stft_magnitude(
     est_mag: Float[Array, "F K"], ref_mag: Float[Array, "F K"]
 ) -> Float[Array, ""]:
@@ -42,6 +46,7 @@ def log_stft_magnitude(
     return jnp.mean(jnp.abs(jnp.log(est_mag + 1e-8) - jnp.log(ref_mag + 1e-8)))
 
 
+@jaxtyped(typechecker=beartype)
 def stft_loss(
     estimate: Float[Array, "T"],
     target: Float[Array, "T"],
@@ -57,6 +62,7 @@ def stft_loss(
     return sc + lm
 
 
+@jaxtyped(typechecker=beartype)
 def multi_resolution_stft_loss(
     estimate: Float[Array, "T"],
     target: Float[Array, "T"],

@@ -23,19 +23,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "=== Downloading JaCappella (4.3 GB) ==="
-bash scripts/download_jacappella.sh --output-dir "$OUTPUT_DIR/jacappella"
+# bash scripts/download_jacappella.sh --output-dir "$OUTPUT_DIR/jacappella"
 
 echo ""
 echo "=== Downloading Dagstuhl ChoirSet (5.1 GB) ==="
-bash scripts/download_dagstuhl.sh --output-dir "$OUTPUT_DIR/dagstuhl_choirset"
+# bash scripts/download_dagstuhl.sh --output-dir "$OUTPUT_DIR/dagstuhl_choirset"
 
-echo ""
-echo "=== Downloading MUSDB18-HQ (22.7 GB) ==="
-bash scripts/download_musdb18hq.sh --output-dir "$OUTPUT_DIR/musdb18hq"
+# echo ""
+# echo "=== Downloading MUSDB18-HQ (22.7 GB) ==="
+# bash scripts/download_musdb18hq.sh --output-dir "$OUTPUT_DIR/musdb18hq"
 
 echo ""
 echo "=== Downloading Acappella from YouTube ==="
-bash scripts/download_acappella.sh --output-dir "$OUTPUT_DIR/acappella"
+bash scripts/download_acappella.sh --output-dir "$OUTPUT_DIR/acappella" --lines 100
 
 echo ""
 echo "All downloads complete. Data is in $OUTPUT_DIR/"

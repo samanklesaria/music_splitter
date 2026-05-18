@@ -5,16 +5,16 @@ between estimated and target stems by trying all permutations and selecting
 the one with minimum total loss.
 """
 
-from __future__ import annotations
-
 import itertools
-from typing import Callable
+from beartype.typing import Callable
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype
 
 
+@jaxtyped(typechecker=beartype)
 def pit_loss(
     estimates: Float[Array, "N T"],
     targets: Float[Array, "N T"],
@@ -35,6 +35,7 @@ def pit_loss(
     n = estimates.shape[0]
     perms = jnp.array(list(itertools.permutations(range(n))))  # (N!, N)
 
+    @jaxtyped(typechecker=beartype)
     def perm_loss(perm: Array) -> Float[Array, ""]:
         # Compute total loss for this permutation
         permuted_estimates = estimates[perm]

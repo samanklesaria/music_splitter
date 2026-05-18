@@ -72,7 +72,7 @@ class TestSepReformer:
             dim=64,
             num_heads=4,
             ff_dim=128,
-            num_blocks=2,
+            num_sep_blocks=2,
             chunk_size=16,
             encoder_kernel=16,
             encoder_stride=8,
@@ -88,7 +88,7 @@ class TestSepReformer:
             dim=32,
             num_heads=2,
             ff_dim=64,
-            num_blocks=1,
+            num_sep_blocks=1,
             chunk_size=8,
             key=key,
         )

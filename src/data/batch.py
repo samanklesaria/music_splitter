@@ -1,104 +1,93 @@
-"""Batch construction for training.
-
-Handles loading segments from datasets, applying augmentation, and collating
-into JAX-compatible batches.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
+"""Batch construction for training using the grain data pipeline."""
 
 import jax.numpy as jnp
 import numpy as np
+import grain
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype
 
-from src.data.augmentation import AugmentationPipeline
-from src.data.dagstuhl import DagstuhlChoirSet
-from src.data.jacappella import JaCappellaDataset
+from src.data.augmentation import AugmentationPipeline, make_training_pair
 
 
-@dataclass
-class BatchLoader:
-    """Simple epoch-based batch loader for training.
+def build_loader(
+    datasets: list,
+    batch_size: int = 8,
+    num_stems: int = 6,
+    sample_rate: int = 44100,
+    segment_seconds: float = 4.0,
+    augmentation: AugmentationPipeline | None = None,
+    seed: int = 42,
+) -> grain.MapDataset:
+    """Build a grain data pipeline over one or more datasets.
 
-    Loads random segments from datasets, applies augmentation, and yields
-    batches as JAX arrays. Not a JAX data pipeline — keeps data loading in
-    NumPy for simplicity.
+    Each element yielded by the returned dataset is a
+    ``(mixtures, stems)`` pair of JAX arrays with shapes
+    ``(batch_size, T)`` and ``(batch_size, num_stems, T)``.
+
+    The pipeline: concatenate sources → shuffle → random segment
+    extraction → optional augmentation → batch.
     """
+    segment_samples = int(segment_seconds * sample_rate)
 
-    datasets: list[JaCappellaDataset | DagstuhlChoirSet]
-    batch_size: int = 8
-    num_stems: int = 4
-    sample_rate: int = 44100
-    segment_seconds: float = 4.0
-    augmentation: AugmentationPipeline | None = None
-    seed: int = 42
+    sources = [grain.MapDataset.source(ds) for ds in datasets]
+    combined = (
+        grain.MapDataset.concatenate(sources) if len(sources) > 1 else sources[0]
+    )
 
-    @property
-    def segment_samples(self) -> int:
-        return int(self.segment_seconds * self.sample_rate)
+    ds = combined.seed(seed).shuffle()
 
-    @property
-    def total_songs(self) -> int:
-        return sum(len(d) for d in self.datasets)
+    @jaxtyped(typechecker=beartype)
+    def extract_segment(
+        item: tuple[Float[np.ndarray, "T"], Float[np.ndarray, "N T"]],
+        rng: np.random.Generator,
+    ) -> tuple[Float[np.ndarray, "S"], Float[np.ndarray, "K S"]]:
+        mixture, stems = item
+        total = mixture.shape[0]
 
-    def _get_item(
-        self, dataset_idx: int, song_idx: int, rng: np.random.Generator
-    ) -> tuple[np.ndarray, np.ndarray]:
-        ds = self.datasets[dataset_idx]
-        mixture, stems = ds.get_segment(song_idx, rng)
-
-        # Ensure consistent number of stems
-        if stems.shape[0] < self.num_stems:
-            padded = np.zeros(
-                (self.num_stems, stems.shape[1]), dtype=np.float32
-            )
+        if stems.shape[0] < num_stems:
+            padded = np.zeros((num_stems, stems.shape[1]), dtype=np.float32)
             padded[: stems.shape[0]] = stems
             stems = padded
-        elif stems.shape[0] > self.num_stems:
-            stems = stems[: self.num_stems]
+        elif stems.shape[0] > num_stems:
+            stems = stems[:num_stems]
 
-        if self.augmentation is not None:
-            stems = self.augmentation.augment_stems(stems, self.sample_rate, rng)
-            mixture = stems.sum(axis=0)
+        if total <= segment_samples:
+            mix_out = np.zeros(segment_samples, dtype=np.float32)
+            stem_out = np.zeros((num_stems, segment_samples), dtype=np.float32)
+            mix_out[:total] = mixture
+            stem_out[:, :total] = stems
+            return mix_out, stem_out
 
-        return mixture, stems
+        start = rng.integers(0, total - segment_samples)
+        return (
+            mixture[start : start + segment_samples],
+            stems[:, start : start + segment_samples],
+        )
 
-    def epoch_batches(
-        self, epoch: int
-    ) -> list[tuple[jnp.ndarray, jnp.ndarray]]:
-        """Generate all batches for one epoch.
+    ds = ds.random_map(extract_segment)
 
-        Returns list of (mixtures, stems) where:
-            mixtures: (batch_size, segment_samples)
-            stems: (batch_size, num_stems, segment_samples)
-        """
-        rng = np.random.default_rng(self.seed + epoch)
+    if augmentation is not None:
+        @jaxtyped(typechecker=beartype)
+        def augment(
+            item: tuple[Float[np.ndarray, "S"], Float[np.ndarray, "N S"]],
+            rng: np.random.Generator,
+        ) -> tuple[Float[np.ndarray, "S"], Float[np.ndarray, "N S"]]:
+            _, stems = item
+            stems = augmentation.augment_stems(stems, sample_rate, rng)
+            mixture, selected = make_training_pair(stems, rng, min_stems=2)
+            k = selected.shape[0]
+            if k < num_stems:
+                padded = np.zeros((num_stems, selected.shape[1]), dtype=np.float32)
+                padded[:k] = selected
+                selected = padded
+            return mixture, selected
 
-        # Build flat index of (dataset_idx, song_idx)
-        indices = []
-        for di, ds in enumerate(self.datasets):
-            for si in range(len(ds)):
-                indices.append((di, si))
+        ds = ds.random_map(augment)
 
-        rng.shuffle(indices)
+    @jaxtyped(typechecker=beartype)
+    def batch_to_jax(items: list) -> tuple[Float[Array, "B S"], Float[Array, "B N S"]]:
+        mixtures = np.stack([m for m, _ in items])
+        stems = np.stack([s for _, s in items])
+        return jnp.array(mixtures), jnp.array(stems)
 
-        batches = []
-        for b_start in range(0, len(indices), self.batch_size):
-            b_indices = indices[b_start : b_start + self.batch_size]
-            if len(b_indices) < self.batch_size:
-                break  # drop incomplete last batch
-
-            mixtures = []
-            stems_list = []
-            for di, si in b_indices:
-                mix, stems = self._get_item(di, si, rng)
-                mixtures.append(mix)
-                stems_list.append(stems)
-
-            mixtures_np = np.stack(mixtures)
-            stems_np = np.stack(stems_list)
-            batches.append(
-                (jnp.array(mixtures_np), jnp.array(stems_np))
-            )
-
-        return batches
+    return ds.batch(batch_size, drop_remainder=True, batch_fn=batch_to_jax)

@@ -1,18 +1,19 @@
 """Composite loss combining SI-SDR and multi-resolution STFT loss with PIT."""
 
-from __future__ import annotations
-
 from typing import Callable
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+
+from beartype import beartype
 
 from src.losses.pit import pit_loss
 from src.losses.sisdr import neg_si_sdr
 from src.losses.stft import multi_resolution_stft_loss
 
 
+@jaxtyped(typechecker=beartype)
 def _pairwise_loss(
     estimate: Float[Array, "T"],
     target: Float[Array, "T"],
@@ -24,6 +25,7 @@ def _pairwise_loss(
     return sisdr + stft_weight * stft
 
 
+@jaxtyped(typechecker=beartype)
 def composite_loss(
     estimates: Float[Array, "N T"],
     targets: Float[Array, "N T"],
@@ -42,6 +44,7 @@ def composite_loss(
         Scalar loss value.
     """
 
+    @jaxtyped(typechecker=beartype)
     def loss_fn(est: Float[Array, "T"], tgt: Float[Array, "T"]) -> Float[Array, ""]:
         return _pairwise_loss(est, tgt, stft_weight)
 

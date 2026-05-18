@@ -17,37 +17,26 @@ Directory structure (expected after download):
         ...
 """
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from jaxtyping import Float, jaxtyped
+from beartype import beartype
 
-STEM_NAMES = ("lead", "soprano", "alto", "tenor", "bass", "vocal_percussion")
-
-# For 4-stem grouping used in baseline training:
-#   0: lead, 1: high harmony (soprano), 2: mid harmony (alto+tenor), 3: low harmony (bass)
-# vocal_percussion is excluded from harmonic separation.
-FOUR_STEM_GROUPS = {
-    "lead": 0,
-    "soprano": 1,
-    "alto": 2,
-    "tenor": 2,
-    "bass": 3,
-}
-
+STEM_NAMES = ("lead_vocal", "soprano", "alto", "tenor", "bass", "vocal_percussion")
 
 @dataclass
 class JaCappellaDataset:
-    """Loads and serves chunks from the JaCappella corpus."""
+    """Grain-compatible RandomAccessDataSource for the JaCappella corpus.
+
+    Each element is a (mixture, stems) pair where stems has shape (num_stems, T).
+    """
 
     root: str | Path
     sample_rate: int = 44100
-    segment_seconds: float = 4.0
-    num_stems: int = 4  # 4 = grouped, 6 = all individual stems
     split: str = "train"  # "train", "val", "test"
     split_ratios: tuple[float, float, float] = (0.7, 0.15, 0.15)
     _songs: list[Path] = field(default_factory=list, init=False, repr=False)
@@ -55,7 +44,11 @@ class JaCappellaDataset:
     def __post_init__(self) -> None:
         self.root = Path(self.root)
         all_songs = sorted(
-            p for p in self.root.iterdir() if p.is_dir() and not p.name.startswith(".")
+            song
+            for genre in self.root.iterdir()
+            if genre.is_dir() and not genre.name.startswith(".")
+            for song in genre.iterdir()
+            if song.is_dir() and not song.name.startswith(".")
         )
         if not all_songs:
             raise FileNotFoundError(f"No song directories found in {self.root}")
@@ -71,11 +64,8 @@ class JaCappellaDataset:
         else:
             self._songs = all_songs[n_train + n_val :]
 
-    @property
-    def segment_samples(self) -> int:
-        return int(self.segment_seconds * self.sample_rate)
-
-    def _load_wav(self, path: Path) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def _load_wav(self, path: Path) -> Float[np.ndarray, "T"]:
         """Load a wav file, resample if needed, return mono float32."""
         audio, sr = sf.read(path, dtype="float32", always_2d=True)
         audio = audio[:, 0]  # take first channel if stereo
@@ -85,7 +75,8 @@ class JaCappellaDataset:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
         return audio
 
-    def _load_stems(self, song_dir: Path) -> dict[str, np.ndarray]:
+    @jaxtyped(typechecker=beartype)
+    def _load_stems(self, song_dir: Path) -> dict[str, Float[np.ndarray, "T"]]:
         """Load all available stems for a song."""
         stems = {}
         for name in STEM_NAMES:
@@ -94,29 +85,18 @@ class JaCappellaDataset:
                 stems[name] = self._load_wav(path)
         return stems
 
-    def _group_stems(self, stems: dict[str, np.ndarray], length: int) -> np.ndarray:
-        """Group 6 stems into `num_stems` output channels.
-
-        Returns array of shape (num_stems, length).
-        """
-        if self.num_stems == 6:
-            out = np.zeros((6, length), dtype=np.float32)
-            for i, name in enumerate(STEM_NAMES):
-                if name in stems:
-                    s = stems[name][:length]
-                    out[i, : len(s)] = s
-            return out
-
-        # 4-stem grouping
-        out = np.zeros((4, length), dtype=np.float32)
-        for name, group_idx in FOUR_STEM_GROUPS.items():
+    def _group_stems(
+        self, stems: dict[str, Float[np.ndarray, "T"]], length: int
+    ) -> Float[np.ndarray, "N T"]:
+        out = np.zeros((6, length), dtype=np.float32)
+        for i, name in enumerate(STEM_NAMES):
             if name in stems:
                 s = stems[name][:length]
-                out[group_idx, : len(s)] += s
+                out[i, : len(s)] = s
         return out
 
-    def load_song(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
-        """Load full song. Returns (mixture, stems) where stems shape is (num_stems, T)."""
+    def load_song(self, idx: int) -> tuple[Float[np.ndarray, "T"], Float[np.ndarray, "N T"]]:
+        """Load full song."""
         song_dir = self._songs[idx]
         stems = self._load_stems(song_dir)
         if not stems:
@@ -127,34 +107,8 @@ class JaCappellaDataset:
         mixture = grouped.sum(axis=0)
         return mixture, grouped
 
-    def get_segment(
-        self, idx: int, rng: np.random.Generator | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Get a random segment from song `idx`.
-
-        Returns (mixture_segment, stems_segment) where:
-            mixture_segment: (segment_samples,)
-            stems_segment: (num_stems, segment_samples)
-        """
-        mixture, stems = self.load_song(idx)
-        total = mixture.shape[0]
-        seg = self.segment_samples
-
-        if total <= seg:
-            # Pad if shorter
-            mix_out = np.zeros(seg, dtype=np.float32)
-            stem_out = np.zeros((self.num_stems, seg), dtype=np.float32)
-            mix_out[:total] = mixture
-            stem_out[:, :total] = stems
-            return mix_out, stem_out
-
-        if rng is None:
-            rng = np.random.default_rng()
-        start = rng.integers(0, total - seg)
-        return mixture[start : start + seg], stems[:, start : start + seg]
-
     def __len__(self) -> int:
         return len(self._songs)
 
-    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
-        return self.get_segment(idx)
+    def __getitem__(self, idx: int) -> tuple[Float[np.ndarray, "T"], Float[np.ndarray, "N T"]]:
+        return self.load_song(idx)

@@ -4,9 +4,11 @@ Primary evaluation metric for source separation. Higher is better.
 """
 
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype
 
 
+@jaxtyped(typechecker=beartype)
 def si_sdr(
     estimate: Float[Array, "T"],
     target: Float[Array, "T"],
@@ -33,6 +35,7 @@ def si_sdr(
     return si_sdr_val
 
 
+@jaxtyped(typechecker=beartype)
 def neg_si_sdr(
     estimate: Float[Array, "T"],
     target: Float[Array, "T"],

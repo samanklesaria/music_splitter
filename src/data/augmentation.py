@@ -4,41 +4,45 @@ Implements the power-set augmentation strategy from SepACap, plus standard
 audio augmentations (pitch shift, time stretch, random gain, RIR convolution).
 """
 
-from __future__ import annotations
-
 import itertools
 from dataclasses import dataclass, field
 
 import numpy as np
+from jaxtyping import Float, jaxtyped
+from beartype import beartype
 
 
 @dataclass
 class AugmentationPipeline:
     """Augments isolated stems before mixing.
 
-    All augmentations operate on individual stems *before* they are summed
-    into a mixture, so each stem gets independent transformations.
+    Parameters are sampled once per segment and applied identically to every
+    stem, so the relative balance between voices is preserved.
     """
 
     pitch_shift_range: tuple[float, float] = (-2.0, 2.0)  # semitones
     time_stretch_range: tuple[float, float] = (0.9, 1.1)
     gain_range_db: tuple[float, float] = (-6.0, 6.0)
-    enable_pitch_shift: bool = True
-    enable_time_stretch: bool = True
-    enable_gain: bool = True
+    enable_pitch_shift: bool = False
+    enable_time_stretch: bool = False
+    enable_gain: bool = False
     enable_rir: bool = False  # requires RIR impulse responses on disk
     rir_paths: list[str] = field(default_factory=list)
     _rir_cache: list[np.ndarray] = field(default_factory=list, init=False, repr=False)
 
-    def random_gain(self, stem: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def random_gain(
+        self, stem: Float[np.ndarray, "T"], rng: np.random.Generator
+    ) -> Float[np.ndarray, "T"]:
         """Apply random gain in dB."""
         lo, hi = self.gain_range_db
         gain_db = rng.uniform(lo, hi)
         return stem * (10.0 ** (gain_db / 20.0))
 
+    @jaxtyped(typechecker=beartype)
     def pitch_shift(
-        self, stem: np.ndarray, sr: int, rng: np.random.Generator
-    ) -> np.ndarray:
+        self, stem: Float[np.ndarray, "T"], sr: int, rng: np.random.Generator
+    ) -> Float[np.ndarray, "T"]:
         """Pitch-shift a stem by a random number of semitones."""
         import librosa
 
@@ -46,7 +50,10 @@ class AugmentationPipeline:
         n_steps = rng.uniform(lo, hi)
         return librosa.effects.pitch_shift(stem, sr=sr, n_steps=n_steps)
 
-    def time_stretch(self, stem: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def time_stretch(
+        self, stem: Float[np.ndarray, "T"], rng: np.random.Generator
+    ) -> Float[np.ndarray, "S"]:
         """Time-stretch a stem by a random factor."""
         import librosa
 
@@ -54,7 +61,10 @@ class AugmentationPipeline:
         rate = rng.uniform(lo, hi)
         return librosa.effects.time_stretch(stem, rate=rate)
 
-    def apply_rir(self, stem: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    @jaxtyped(typechecker=beartype)
+    def apply_rir(
+        self, stem: Float[np.ndarray, "T"], rng: np.random.Generator
+    ) -> Float[np.ndarray, "T"]:
         """Convolve with a random room impulse response."""
         if not self._rir_cache:
             if not self.rir_paths:
@@ -74,48 +84,56 @@ class AugmentationPipeline:
             convolved *= np.sqrt(np.sum(stem**2) / (np.sum(convolved**2) + 1e-8))
         return convolved
 
-    def augment_stem(
-        self, stem: np.ndarray, sr: int, rng: np.random.Generator
-    ) -> np.ndarray:
-        """Apply all enabled augmentations to a single stem."""
-        if self.enable_gain:
-            stem = self.random_gain(stem, rng)
-        if self.enable_pitch_shift:
-            stem = self.pitch_shift(stem, sr, rng)
-        if self.enable_time_stretch:
-            original_len = len(stem)
-            stem = self.time_stretch(stem, rng)
-            # Crop or pad to original length after stretch
-            if len(stem) > original_len:
-                stem = stem[:original_len]
-            elif len(stem) < original_len:
-                stem = np.pad(stem, (0, original_len - len(stem)))
-        if self.enable_rir:
-            stem = self.apply_rir(stem, rng)
-        return stem.astype(np.float32)
-
+    @jaxtyped(typechecker=beartype)
     def augment_stems(
-        self, stems: np.ndarray, sr: int, rng: np.random.Generator
-    ) -> np.ndarray:
-        """Augment each stem independently. stems shape: (num_stems, T)."""
+        self, stems: Float[np.ndarray, "N T"], sr: int, rng: np.random.Generator
+    ) -> Float[np.ndarray, "N T"]:
+        """Augment all stems with the same sampled transformation parameters."""
+        gain_db = rng.uniform(*self.gain_range_db) if self.enable_gain else None
+        n_steps = rng.uniform(*self.pitch_shift_range) if self.enable_pitch_shift else None
+        rate = rng.uniform(*self.time_stretch_range) if self.enable_time_stretch else None
+
+        rir = None
+        if self.enable_rir:
+            if not self._rir_cache:
+                if self.rir_paths:
+                    import soundfile as sf
+                    for p in self.rir_paths:
+                        r, _ = sf.read(p, dtype="float32")
+                        self._rir_cache.append(r[:, 0] if r.ndim > 1 else r)
+            if self._rir_cache:
+                rir = self._rir_cache[rng.integers(0, len(self._rir_cache))]
+
         out = np.empty_like(stems)
         for i in range(stems.shape[0]):
-            out[i] = self.augment_stem(stems[i], sr, rng)
+            stem = stems[i]
+            if gain_db is not None:
+                stem = stem * (10.0 ** (gain_db / 20.0))
+            if n_steps is not None:
+                import librosa
+                stem = librosa.effects.pitch_shift(stem, sr=sr, n_steps=n_steps)
+            if rate is not None:
+                import librosa
+                original_len = len(stem)
+                stem = librosa.effects.time_stretch(stem, rate=rate)
+                if len(stem) > original_len:
+                    stem = stem[:original_len]
+                elif len(stem) < original_len:
+                    stem = np.pad(stem, (0, original_len - len(stem)))
+            if rir is not None:
+                pre_energy = np.sum(stem ** 2)
+                stem = np.convolve(stem, rir, mode="full")[: len(stem)]
+                if np.max(np.abs(stem)) > 0:
+                    stem *= np.sqrt(pre_energy / (np.sum(stem ** 2) + 1e-8))
+            out[i] = stem.astype(np.float32)
         return out
 
 
+@jaxtyped(typechecker=beartype)
 def power_set_subsets(
-    stems: np.ndarray, min_size: int = 2
-) -> list[tuple[list[int], np.ndarray]]:
-    """Generate all subsets of stems with at least `min_size` members.
-
-    Args:
-        stems: (num_stems, T) array of isolated stems.
-        min_size: Minimum subset size (default 2 — need at least 2 to separate).
-
-    Returns:
-        List of (indices, subset_stems) tuples where subset_stems is (k, T).
-    """
+    stems: Float[np.ndarray, "N T"], min_size: int = 1
+) -> list[tuple[list[int], Float[np.ndarray, "k T"]]]:
+    """Generate all subsets of stems with at least `min_size` members."""
     n = stems.shape[0]
     subsets = []
     for size in range(min_size, n + 1):
@@ -126,15 +144,13 @@ def power_set_subsets(
     return subsets
 
 
+@jaxtyped(typechecker=beartype)
 def make_training_pair(
-    stems: np.ndarray,
+    stems: Float[np.ndarray, "N T"],
     rng: np.random.Generator,
     min_stems: int = 2,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Create a single training pair by randomly selecting a subset of stems.
-
-    Returns (mixture, selected_stems) where mixture is the sum of selected stems.
-    """
+) -> tuple[Float[np.ndarray, "T"], Float[np.ndarray, "k T"]]:
+    """Create a single training pair by randomly selecting a subset of stems."""
     n = stems.shape[0]
     k = rng.integers(min_stems, n + 1)
     indices = rng.choice(n, size=k, replace=False)

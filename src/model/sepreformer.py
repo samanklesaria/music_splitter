@@ -8,20 +8,17 @@ SepACap (Lanzendörfer & Pinkl, 2024):
   - Early split into N independent speaker streams with weight-shared reconstruction
 """
 
-from __future__ import annotations
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
-from typeguard import typechecked
+from jaxtyping import Array, Float, jaxtyped
+from beartype import beartype
 
 
 # --------------------------------------------------------------------------- #
 # SNAKE activation
 # --------------------------------------------------------------------------- #
 
-@typechecked
 class Snake(eqx.Module):
     """SNAKE activation: x + (1/a) * sin^2(a * x).
 
@@ -33,6 +30,7 @@ class Snake(eqx.Module):
     def __init__(self, features: int, *, key: jax.random.PRNGKey):
         self.alpha = jnp.ones(features)
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "... F"]) -> Float[Array, "... F"]:
         a = self.alpha
         return x + (1.0 / (a + 1e-6)) * jnp.sin(a * x) ** 2
@@ -43,7 +41,6 @@ class Snake(eqx.Module):
 # --------------------------------------------------------------------------- #
 
 
-@typechecked
 class Encoder(eqx.Module):
     """1-D convolutional encoder: waveform → latent representation."""
 
@@ -61,6 +58,7 @@ class Encoder(eqx.Module):
             1, out_channels, kernel_size, stride=stride, key=key
         )
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "T"]) -> Float[Array, "L C"]:
         # x: (T,) → (1, T) for Conv1d
         x = x[None, :]  # (1, T)
@@ -69,7 +67,6 @@ class Encoder(eqx.Module):
         h = jnp.transpose(h)  # (L, C)
         return h
 
-@typechecked
 class Decoder(eqx.Module):
     """Transposed 1-D convolution decoder: latent → waveform."""
 
@@ -87,6 +84,7 @@ class Decoder(eqx.Module):
             in_channels, 1, kernel_size, stride=stride, key=key
         )
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, h: Float[Array, "L C"]) -> Float[Array, "T"]:
         h = jnp.transpose(h)  # (C, L)
         out = self.conv_t(h)  # (1, T)
@@ -97,7 +95,6 @@ class Decoder(eqx.Module):
 # Dual-path transformer block
 # --------------------------------------------------------------------------- #
 
-@typechecked
 class FeedForward(eqx.Module):
     """Two-layer FFN with SNAKE activation."""
 
@@ -111,12 +108,12 @@ class FeedForward(eqx.Module):
         self.linear2 = eqx.nn.Linear(ff_dim, dim, key=k2)
         self.snake = Snake(ff_dim, key=k3)
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "F"]) -> Float[Array, "F"]:
         h = self.linear1(x)
         h = self.snake(h)
         return self.linear2(h)
 
-@typechecked
 class TransformerBlock(eqx.Module):
     """Pre-norm transformer block with RoPE, multi-head attention, FFN, and LayerScale."""
 
@@ -142,6 +139,7 @@ class TransformerBlock(eqx.Module):
         self.scale1 = jnp.full(dim, 1e-4)
         self.scale2 = jnp.full(dim, 1e-4)
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "S D"]) -> Float[Array, "S D"]:
         # Self-attention with pre-norm, RoPE, and LayerScale
         normed = jax.vmap(self.norm1)(x)
@@ -159,7 +157,6 @@ class TransformerBlock(eqx.Module):
         x = x + self.scale2 * ff_out
         return x
 
-@typechecked
 class DualPathBlock(eqx.Module):
     """Dual-path processing: intra-chunk attention + inter-chunk attention.
 
@@ -186,6 +183,7 @@ class DualPathBlock(eqx.Module):
         self.inter_block = TransformerBlock(dim, num_heads, ff_dim, key=k2)
         self.chunk_size = chunk_size
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "L C"]) -> Float[Array, "L C"]:
         L, C = x.shape
         K = self.chunk_size
@@ -237,6 +235,7 @@ class SplitLayer(eqx.Module):
         self.linear2 = eqx.nn.Linear(dim, dim * num_stems, key=k2)
         self.num_stems = num_stems
 
+    @jaxtyped(typechecker=beartype)
     def __call__(self, x: Float[Array, "L C"]) -> Float[Array, "N L C"]:
         L, C = x.shape
         # First linear + GLU
@@ -318,6 +317,7 @@ class SepReformer(eqx.Module):
             for i in range(num_rec_blocks)
         ]
 
+    @jaxtyped(typechecker=beartype)
     def __call__(
         self, x: Float[Array, "T"]
     ) -> Float[Array, "N T"]:
